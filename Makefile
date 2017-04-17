@@ -115,8 +115,11 @@ DEPENDS	:=	$(OFILES:.o=.d)
 # main targets
 #---------------------------------------------------------------------------------
 
-$(OUTPUT).cia   :	$(OUTPUT).cxi
-	@makerom -f cia -o $(OUTPUT).cia -target t -i $(OUTPUT).cxi:0:0
+.PHONY: all
+all	:	$(OUTPUT).cia $(OUTPUT).cxi
+
+$(OUTPUT).cia   :	$(OUTPUT).elf $(TOPDIR)/icon.icn $(TOPDIR)/rsf.rsf $(TOPDIR)/banner.bnr
+	@makerom -f cia -o $(OUTPUT).cia -rsf $(TOPDIR)/rsf.rsf -target t -elf $(OUTPUT).elf -icon $(TOPDIR)/icon.icn -banner $(TOPDIR)/banner.bnr
 	@echo built ... $(OUTPUT).cia
 	
 $(OUTPUT).cxi   :   $(OUTPUT).elf $(TOPDIR)/icon.icn $(TOPDIR)/rsf.rsf $(TOPDIR)/banner.bnr
