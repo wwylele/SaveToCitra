@@ -156,16 +156,8 @@ void CopyDir(FS_Archive src_archive, const std::u16string& src_path, FS_Archive 
     }
 }
 
-int main() {
-    aptInit();
-    gfxInitDefault();
-    consoleInit(GFX_TOP, NULL);
-
-    hidInit();
-
-    printf("Initializing...\n");
-
-    ExitOnError("amInit", amInit());
+void DumpSDSave(FS_Archive sd, const std::u16string& sdsave_root) {
+    printf("Dumping SD save...\n");
 
     u32 sd_title_count;
     ExitOnError("GetTitleCount(sd)", AM_GetTitleCount(MEDIATYPE_SD, &sd_title_count));
@@ -181,29 +173,6 @@ int main() {
         Exit();
     }
 
-    FS_Path sd_path{PATH_EMPTY, 0, nullptr};
-    FS_Archive sd;
-    ExitOnError("OpenArchive(sd)", (FSUSER_OpenArchive(&sd, ARCHIVE_SDMC, sd_path)));
-
-    std::u16string root = u"/save-to-citra", sd_root = root;
-    FSUSER_DeleteDirectoryRecursively(sd, MakePath(root));
-    FSUSER_CreateDirectory(sd, MakePath(root), 0);
-    sd_root += u"/sdmc";
-    FSUSER_CreateDirectory(sd, MakePath(sd_root), 0);
-    sd_root += u"/Nintendo 3DS";
-    FSUSER_CreateDirectory(sd, MakePath(sd_root), 0);
-    sd_root += u"/00000000000000000000000000000000";
-    FSUSER_CreateDirectory(sd, MakePath(sd_root), 0);
-    sd_root += u"/00000000000000000000000000000000";
-    FSUSER_CreateDirectory(sd, MakePath(sd_root), 0);
-    sd_root += u"/title";
-    FSUSER_CreateDirectory(sd, MakePath(sd_root), 0);
-    sd_root += u"/00040000";
-    FSUSER_CreateDirectory(sd, MakePath(sd_root), 0);
-
-    Pause();
-
-    printf("Dumping SD save...\n");
     for (u64 title : sd_titles) {
         if ((title >> 32) == 0x00040000) {
 
@@ -214,7 +183,7 @@ int main() {
             }
 
             printf("Title: %016llX\n", title);
-            std::u16string save_root = sd_root;
+            std::u16string save_root = sdsave_root;
             save_root += u"/" + Hex32ToString(title & 0xFFFFFFFF);
             FSUSER_CreateDirectory(sd, MakePath(save_root), 0);
             save_root += u"/data";
@@ -258,6 +227,44 @@ int main() {
             }
         }
     }
+}
+
+int main() {
+    aptInit();
+    gfxInitDefault();
+    consoleInit(GFX_TOP, NULL);
+
+    hidInit();
+
+    printf("Initializing...\n");
+
+    ExitOnError("amInit", amInit());
+
+    FS_Path sd_path{PATH_EMPTY, 0, nullptr};
+    FS_Archive sd;
+    ExitOnError("OpenArchive(sd)", (FSUSER_OpenArchive(&sd, ARCHIVE_SDMC, sd_path)));
+
+    std::u16string root = u"/save-to-citra", sd_root = root;
+    FSUSER_DeleteDirectoryRecursively(sd, MakePath(root));
+    FSUSER_CreateDirectory(sd, MakePath(root), 0);
+    sd_root += u"/sdmc";
+    FSUSER_CreateDirectory(sd, MakePath(sd_root), 0);
+    sd_root += u"/Nintendo 3DS";
+    FSUSER_CreateDirectory(sd, MakePath(sd_root), 0);
+    sd_root += u"/00000000000000000000000000000000";
+    FSUSER_CreateDirectory(sd, MakePath(sd_root), 0);
+    sd_root += u"/00000000000000000000000000000000";
+    FSUSER_CreateDirectory(sd, MakePath(sd_root), 0);
+
+    std::u16string sdsave_root = sd_root;
+    sdsave_root += u"/title";
+    FSUSER_CreateDirectory(sd, MakePath(sdsave_root), 0);
+    sdsave_root += u"/00040000";
+    FSUSER_CreateDirectory(sd, MakePath(sdsave_root), 0);
+
+    Pause();
+
+    DumpSDSave(sd, sdsave_root);
 
     FSUSER_CloseArchive(sd);
 
