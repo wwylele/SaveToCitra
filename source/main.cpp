@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <string>
 #include <vector>
 #include <3ds.h>
@@ -86,8 +87,6 @@ std::u16string Hex32ToString(u32 hex) {
     return result;
 }
 
-constexpr FS_ArchiveID ARCHIVE_SAVE = (FS_ArchiveID)0x567890B2;
-
 FS_Path MakeSDSaveBinaryPath(u64 title_id) {
     return MakePath(std::vector<u32>{1, (u32)(title_id & 0xFFFFFFFF), (u32)(title_id >> 32)});
 }
@@ -127,34 +126,70 @@ void CopyDir(FS_Archive src_archive, const std::u16string& src_path, FS_Archive 
                     dst_path + u"/" + sub_name);
         } else {
             Handle file;
-            if (!PrintOnError("OpenFile (source)",
-                              FSUSER_OpenFile(&file, src_archive,
-                                              MakePath(src_path + u"/" + sub_name), FS_OPEN_READ,
-                                              0)))
-                break;
-
-            u64 size;
-            if (!PrintOnError("GetSize (source)", FSFILE_GetSize(file, &size)))
-                break;
-
-            std::vector<u8> buffer(size);
+            std::vector<u8> buffer;
             u32 bytes;
-            PrintOnError("Read (source)", FSFILE_Read(file, &bytes, 0, buffer.data(), size));
+            bool failed = false;
 
-            PrintOnError("Close (source)", FSFILE_Close(file));
+            if (PrintOnError("OpenFile (source)",
+                             FSUSER_OpenFile(&file, src_archive,
+                                             MakePath(src_path + u"/" + sub_name), FS_OPEN_READ,
+                                             0))) {
+                u64 size = 0;
+                if (!PrintOnError("GetSize (source)", FSFILE_GetSize(file, &size)))
+                    failed = true;
 
-            if (!PrintOnError("OpenFile (dest)",
-                              FSUSER_OpenFile(&file, dst_archive,
-                                              MakePath(dst_path + u"/" + sub_name),
-                                              FS_OPEN_WRITE | FS_OPEN_CREATE, 0)))
-                break;
+                if (size) {
+                    buffer.resize(size);
+                    if (!PrintOnError("Read (source)",
+                                      FSFILE_Read(file, &bytes, 0, buffer.data(), size)))
+                        failed = true;
+                    else if (bytes != size) {
+                        printf("Read (source) size mismatch\n");
+                        failed = true;
+                    }
+                }
+                if (!PrintOnError("Close (source)", FSFILE_Close(file)))
+                    failed = true;
+            } else
+                failed = true;
 
-            PrintOnError("Write (dest)", FSFILE_Write(file, &bytes, 0, buffer.data(), size, 0));
+            if (PrintOnError("OpenFile (dest)",
+                             FSUSER_OpenFile(&file, dst_archive,
+                                             MakePath(dst_path + u"/" + sub_name),
+                                             FS_OPEN_WRITE | FS_OPEN_CREATE, 0))) {
+                if (buffer.size()) {
+                    if (!PrintOnError("Write (dest)", FSFILE_Write(file, &bytes, 0, buffer.data(),
+                                                                   buffer.size(), 0)))
+                        failed = true;
+                    else if (bytes != buffer.size()) {
+                        printf("Write (dest) size mismatch\n");
+                        failed = true;
+                    }
+                }
+                if (!PrintOnError("Close (dest)", FSFILE_Close(file)))
+                    failed = true;
+            } else
+                failed = true;
 
-            PrintOnError("Close (dest)", FSFILE_Close(file));
+            if (failed) {
+                std::u16string full_src_path(src_path + u"/" + sub_name);
+                std::string converted(full_src_path.size(), ' ');
+                std::copy(full_src_path.begin(), full_src_path.end(), converted.begin());
+                printf(" %s\n", converted.c_str());
+            }
         }
     }
 }
+
+struct ArchiveFormatInfo {
+    u32 total_size;
+    u32 number_directories;
+    u32 number_files;
+    bool duplicate_data;
+    u8 padding[3];
+};
+
+static_assert(sizeof(ArchiveFormatInfo) == 16, "ArchiveFormatInfo has wrong size");
 
 void DumpSDSave(FS_Archive sd, const std::u16string& sdsave_root) {
     printf("Dumping SD save...\n");
@@ -177,8 +212,8 @@ void DumpSDSave(FS_Archive sd, const std::u16string& sdsave_root) {
         if ((title >> 32) == 0x00040000) {
 
             FS_Archive save_archive;
-            if (R_FAILED(
-                    FSUSER_OpenArchive(&save_archive, ARCHIVE_SAVE, MakeSDSaveBinaryPath(title)))) {
+            if (R_FAILED(FSUSER_OpenArchive(&save_archive, ARCHIVE_USER_SAVEDATA,
+                                            MakeSDSaveBinaryPath(title)))) {
                 continue;
             }
 
@@ -201,14 +236,7 @@ void DumpSDSave(FS_Archive sd, const std::u16string& sdsave_root) {
             if (PrintOnError("OpenFile(metadata)",
                              FSUSER_OpenFile(&file_metadata, sd, MakePath(save_metadata),
                                              FS_OPEN_WRITE | FS_OPEN_CREATE, 0))) {
-                struct ArchiveFormatInfo {
-                    u32 total_size;
-                    u32 number_directories;
-                    u32 number_files;
-                    bool duplicate_data;
-                    u8 padding[3];
-                } format_info;
-                static_assert(sizeof(format_info) == 16, "!");
+                ArchiveFormatInfo format_info;
 
                 // NOTE: FSUSER_GetFormatInfo only works with some CategoryFileSystemTool flag on.
                 //       thus currently this application must be built as CIA. It doesn't even work
@@ -218,7 +246,7 @@ void DumpSDSave(FS_Archive sd, const std::u16string& sdsave_root) {
                     "GetFormatInfo",
                     FSUSER_GetFormatInfo(&format_info.total_size, &format_info.number_directories,
                                          &format_info.number_files, &format_info.duplicate_data,
-                                         ARCHIVE_SAVE, MakeSDSaveBinaryPath(title)));
+                                         ARCHIVE_USER_SAVEDATA, MakeSDSaveBinaryPath(title)));
 
                 PrintOnError("Write(metadata)", FSFILE_Write(file_metadata, nullptr, 0,
                                                              &format_info, sizeof(format_info), 0));
@@ -227,6 +255,79 @@ void DumpSDSave(FS_Archive sd, const std::u16string& sdsave_root) {
             }
         }
     }
+
+    printf("Done\n");
+}
+
+void DumpSDExt(FS_Archive sd, const std::u16string& sdext_root) {
+    printf("Dumping SD ext...\n");
+
+    std::vector<u64> ext_ids(4);
+
+    while (1) {
+        u32 count_read;
+        FSUSER_EnumerateExtSaveData(&count_read, ext_ids.size() * 8, MEDIATYPE_SD, 8, false,
+                                    (u8*)ext_ids.data());
+        if (count_read > ext_ids.size()) {
+            printf("what??");
+            return;
+        } else if (count_read < ext_ids.size()) {
+            ext_ids.resize(count_read);
+            break;
+        }
+
+        ext_ids.resize(ext_ids.size() * 2);
+    }
+
+    printf("SD ext count: %zu\n", ext_ids.size());
+
+    for (u64 ext_id : ext_ids) {
+        printf("Ext: %016llX\n", ext_id);
+
+        if ((ext_id >> 32) != 0) {
+            printf("Unexpected non zero ID high!\n");
+            continue;
+        }
+
+        std::u16string ext_root = sdext_root + u"/" + Hex32ToString(ext_id & 0xFFFFFFFF);
+        FSUSER_CreateDirectory(sd, MakePath(ext_root), 0);
+        std::u16string extuser_root = ext_root + u"/user";
+        FSUSER_CreateDirectory(sd, MakePath(extuser_root), 0);
+        std::u16string extboss_root = ext_root + u"/boss";
+        FSUSER_CreateDirectory(sd, MakePath(extboss_root), 0);
+
+        // Save data
+        FS_Archive ext_archive;
+        if (PrintOnError("OpenArchive", FSUSER_OpenArchive(&ext_archive, ARCHIVE_EXTDATA,
+                                                           MakeSDSaveBinaryPath(ext_id)))) {
+
+            CopyDir(ext_archive, u"", sd, extuser_root);
+            PrintOnError("CloseArchive", FSUSER_CloseArchive(ext_archive));
+        }
+
+        // Write metadata
+        std::u16string ext_metadata = ext_root + u"/metadata";
+        Handle file_metadata;
+        if (PrintOnError("OpenFile(metadata)",
+                         FSUSER_OpenFile(&file_metadata, sd, MakePath(ext_metadata),
+                                         FS_OPEN_WRITE | FS_OPEN_CREATE, 0))) {
+            ArchiveFormatInfo format_info;
+            PrintOnError(
+                "GetFormatInfo",
+                FSUSER_GetFormatInfo(&format_info.total_size, &format_info.number_directories,
+                                     &format_info.number_files, &format_info.duplicate_data,
+                                     ARCHIVE_EXTDATA, MakeSDSaveBinaryPath(ext_id)));
+
+            PrintOnError("Write(metadata)", FSFILE_Write(file_metadata, nullptr, 0, &format_info,
+                                                         sizeof(format_info), 0));
+
+            PrintOnError("Close(metadata)", FSFILE_Close(file_metadata));
+        }
+
+        // TODO: icon
+    }
+
+    printf("Done\n");
 }
 
 int main() {
@@ -242,7 +343,7 @@ int main() {
 
     FS_Path sd_path{PATH_EMPTY, 0, nullptr};
     FS_Archive sd;
-    ExitOnError("OpenArchive(sd)", (FSUSER_OpenArchive(&sd, ARCHIVE_SDMC, sd_path)));
+    ExitOnError("OpenArchive(sd)", FSUSER_OpenArchive(&sd, ARCHIVE_SDMC, sd_path));
 
     std::u16string root = u"/save-to-citra", sd_root = root;
     FSUSER_DeleteDirectoryRecursively(sd, MakePath(root));
@@ -262,13 +363,20 @@ int main() {
     sdsave_root += u"/00040000";
     FSUSER_CreateDirectory(sd, MakePath(sdsave_root), 0);
 
+    std::u16string sdext_root = sd_root;
+    sdext_root += u"/extdata";
+    FSUSER_CreateDirectory(sd, MakePath(sdext_root), 0);
+    sdext_root += u"/00000000";
+    FSUSER_CreateDirectory(sd, MakePath(sdext_root), 0);
+
     Pause();
 
     DumpSDSave(sd, sdsave_root);
+    DumpSDExt(sd, sdext_root);
 
     FSUSER_CloseArchive(sd);
 
-    printf("Done!\n");
+    printf("All done!\n");
 
     Pause();
 
