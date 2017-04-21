@@ -1,7 +1,7 @@
 BasicInfo:
   Title                   : s2citra
   ProductCode             : CTR-HB-S2CT
-  Logo                    : Nintendo
+  Logo                    : Homebrew
 
 RomFs:
   # Specifies the root path of the read only file system to include in the ROM.
